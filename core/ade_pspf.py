@@ -59,7 +59,7 @@ class ADEPSPFConfig:
     x_max: float = 256.0
     y_min: float = 0.0
     y_max: float = 256.0
-    intensity_min: float = 10.0
+    intensity_min: float = 0.0
     intensity_max: float = 100.0
 
     @property

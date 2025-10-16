@@ -31,6 +31,7 @@ from simulation.exploration.rrt_planner import (
     RRTPlanner, PlannerConfig, RadiationGainModel, GainParameters,
     PlanarEnvironment, Pose2D, RRTNode
 )
+from simulation.exploration.rrt_planner_v2 import RRTPlannerV2, PerformanceConfig
 
 
 class ExplorationPhase(Enum):
@@ -79,6 +80,10 @@ class ExplorationConfig:
     # RRT parameters (optimized defaults)
     rrt_config: Optional[PlannerConfig] = None
     gain_params: Optional[GainParameters] = None
+
+    # RRT V2 optimization
+    use_rrt_v2: bool = True  # Use optimized RRT Planner V2
+    rrt_v2_perf_config: Optional[PerformanceConfig] = None
 
 
 @dataclass
@@ -212,7 +217,15 @@ class IntegratedExplorerV2:
             max_step=20.0,  # Maximum 0.8m per step
             random_seed=self.rng.integers(0, 10000)
         )
-        self.planner = RRTPlanner(environment, gain_model, rrt_config)
+
+        # Choose RRT planner version
+        if config.use_rrt_v2:
+            perf_config = config.rrt_v2_perf_config or PerformanceConfig(verbose=False)
+            self.planner = RRTPlannerV2(environment, gain_model, rrt_config, perf_config)
+            print("  [RRT] Using optimized RRT Planner V2")
+        else:
+            self.planner = RRTPlanner(environment, gain_model, rrt_config)
+            print("  [RRT] Using original RRT Planner V1")
 
         # History
         self.iteration_results: List[IterationResult] = []
@@ -384,7 +397,7 @@ class IntegratedExplorerV2:
 
             # Step 3: Execute part of the best path
             exec_start = time.time()
-            observations_made = self._execution_step(best_branch)
+            observations_made, n_nodes_executed = self._execution_step(best_branch)
             time_execution = time.time() - exec_start
 
             time_total = time.time() - iter_start
@@ -406,8 +419,11 @@ class IntegratedExplorerV2:
             )
             self.iteration_results.append(iteration_result)
 
-            # Update previous best branch for next iteration
-            self.previous_best_branch = best_branch
+            # Update previous best branch for next iteration (Eq. 9)
+            # NOTE: Disabled branch reuse because robot position changes after execution
+            # The reused branch would have incorrect parent references
+            # TODO: Implement proper parent index remapping for branch reuse
+            self.previous_best_branch = None  # Fresh planning each iteration
 
             if self.config.log_iteration_details:
                 print(f"\nIteration {iteration + 1} complete:")
@@ -433,7 +449,12 @@ class IntegratedExplorerV2:
 
         try:
             intensity = self.observer.observe((y_int, x_int))
-            self.robot.add_observation(np.array([y, x]), intensity)
+            # Store observations in (x, y) order to stay consistent with Eq. (1)
+            # of the paper, which operates in planar Cartesian coordinates.
+            self.robot.add_observation(
+                np.array([x, y], dtype=np.float64),
+                intensity
+            )
         except Exception as e:
             print(f"⚠ Warning: Failed to make observation at ({x:.1f}, {y:.1f}): {e}")
 
@@ -576,7 +597,7 @@ class IntegratedExplorerV2:
             print(f"⚠ Error in exploration step: {e}")
             return []
 
-    def _execution_step(self, best_branch: List[RRTNode]) -> int:
+    def _execution_step(self, best_branch: List[RRTNode]) -> tuple[int, int]:
         """
         Execute first edge only (논문 방식).
 
@@ -589,7 +610,7 @@ class IntegratedExplorerV2:
             best_branch: Best branch from RRT
 
         Returns:
-            Number of observations made
+            Tuple of (observations_made, n_nodes_executed)
         """
         if self.config.log_iteration_details:
             print(f"\n[EXECUTION] Moving along path (first edge only)...")
@@ -599,7 +620,7 @@ class IntegratedExplorerV2:
             if self.config.branch_execution_ratio == 0.0:
                 # Execute only first edge (논문 방식)
                 if len(best_branch) < 2:
-                    return 0
+                    return 0, 0
 
                 n_nodes = 1  # First edge only
             else:
@@ -635,7 +656,7 @@ class IntegratedExplorerV2:
                     # Path is too short even with all nodes, skip this iteration
                     if self.config.log_iteration_details:
                         print(f"  ⚠ Path too short ({planned_distance:.1f}px < {MIN_MOVEMENT_DISTANCE:.1f}px), skipping movement")
-                    return 0  # Don't move, don't make observations
+                    return 0, 0  # Don't move, don't make observations
 
             if self.config.log_iteration_details:
                 print(f"  Executing {n_nodes}/{len(best_branch)} nodes")
@@ -663,12 +684,13 @@ class IntegratedExplorerV2:
                 print(f"  Final position: ({self.robot.pose.x:.1f}, {self.robot.pose.y:.1f})")
                 print(f"  Actual movement: {actual_distance:.1f} pixels ({actual_distance * 0.04:.3f} m)")
                 print(f"  Observations made: {observations_made}")
+                print(f"  Nodes executed: {n_nodes}")
 
-            return observations_made
+            return observations_made, n_nodes
 
         except Exception as e:
             print(f"⚠ Error in execution step: {e}")
-            return 0
+            return 0, 0
 
     def _adjust_swarm_number(
         self,
@@ -690,7 +712,7 @@ class IntegratedExplorerV2:
         """
         MIN_ITERATIONS = 5  # At least 5 iterations before adjustment
         RFC_THRESHOLD = 0.7  # Low RFC threshold
-        MAX_SWARMS = 10  # Maximum number of swarms
+        MAX_SWARMS = 5  # Maximum number of swarms
 
         if iteration < MIN_ITERATIONS:
             return

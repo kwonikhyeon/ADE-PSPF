@@ -12,7 +12,7 @@ where:
 from __future__ import annotations
 import numpy as np
 from typing import List, Tuple, Optional
-from scipy.special import factorial
+from scipy.special import gammaln
 import warnings
 
 # Suppress overflow warnings in factorial calculations
@@ -41,13 +41,15 @@ def poisson_pmf(k: float, lambda_: float) -> float:
 
     # Compute in log space to avoid overflow
     try:
-        log_prob = k * np.log(lambda_) - lambda_ - np.sum(np.log(np.arange(1, int(k) + 1)))
-        return np.exp(log_prob)
+        # Use gammaln for stable log-factorial: log(k!) = gammaln(k + 1)
+        log_prob = k * np.log(lambda_) - lambda_ - gammaln(k + 1.0)
+        return float(np.exp(log_prob))
     except (OverflowError, ValueError):
-        # Fallback to approximation for large values
         if k > 100 or lambda_ > 100:
-            # Normal approximation for large k, lambda
-            return np.exp(-0.5 * ((k - lambda_) / np.sqrt(lambda_)) ** 2) / np.sqrt(2 * np.pi * lambda_)
+            return float(
+                np.exp(-0.5 * ((k - lambda_) / np.sqrt(lambda_)) ** 2)
+                / np.sqrt(2 * np.pi * lambda_)
+            )
         return 0.0
 
 

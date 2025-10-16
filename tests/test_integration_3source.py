@@ -100,6 +100,17 @@ def run_3source_scenario(
     )
 
     # Configure exploration (IntegratedExplorerV2 uses gt_field directly)
+    adepspf_config = ADEPSPFConfig(
+        n_swarms=4,
+        n_particles=250,
+        n_iterations=15,
+        ade_generations=10,
+        x_min=0.0,
+        x_max=float(grid_size),
+        y_min=0.0,
+        y_max=float(grid_size)
+    )
+
     exploration_config = ExplorationConfig(
         grid_size=grid_size,
         robot_start_x=start_pose[0],
@@ -110,11 +121,7 @@ def run_3source_scenario(
         observations_per_iteration=1,
         log_iteration_details=verbose,
         enable_timing_logs=False,
-        # ADE-PSPF config
-        n_swarms=4,
-        n_particles_per_swarm=250,
-        pspf_iterations=15,
-        ade_generations=10
+        adepspf_config=adepspf_config
     )
 
     # Run exploration
@@ -131,7 +138,7 @@ def run_3source_scenario(
     # Extract final results
     final_sources = results['final_sources']
     final_rfc = results['final_rfc']
-    n_iterations = results['iterations_completed']
+    n_iterations = results['iterations']
 
     if verbose:
         print(f"\n{'='*70}")
