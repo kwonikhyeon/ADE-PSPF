@@ -158,13 +158,25 @@ class ExplorerController:
                 robot_start_y=128.0,
                 robot_start_theta=0.0,
                 max_iterations=max_iterations,
-                # branch_execution_ratio=branch_execution_ratio,
                 min_rfc_threshold=0.85,
-                # observations_per_iteration=observations_per_iteration,
-                # max_observations_for_weight=20,
-                # enable_timing_logs=enable_logs,
-                # log_iteration_details=enable_logs,
-                # adepspf_config=adepspf_config
+
+                # ADE-PSPF parameters
+                n_swarms=n_swarms,
+                n_particles_per_swarm=n_particles,
+                ade_generations=ade_generations,
+
+                # RRT parameters
+                use_rrt_v2=True,  # Use optimized RRT
+                enable_branch_reuse=True,  # Eq. 9: Branch reuse
+
+                # Execution parameters
+                execute_first_edge_only=True,  # Paper mode
+                branch_execution_ratio=branch_execution_ratio,
+                observations_per_iteration=observations_per_iteration,
+
+                # Logging
+                enable_verbose_logging=enable_logs,
+                log_iteration_details=enable_logs
             )
 
             # Create explorer
@@ -453,6 +465,9 @@ class ExplorerController:
             self.is_completed = True
             self.is_running = False
 
+            # Get swarm adjustment statistics
+            swarm_stats = self.explorer.swarm_adjuster.get_statistics()
+
             print(f"\n{'='*70}")
             print(f"EXPLORATION COMPLETED")
             print(f"{'='*70}")
@@ -462,6 +477,14 @@ class ExplorerController:
             print(f"Final RFC: {final_result['rfc']:.4f}")
             print(f"Best RFC: {final_result['best_rfc']:.4f}")
             print(f"Converged: {self.explorer.converged}")
+            print(f"\nSwarm Adjustment Summary:")
+            print(f"  Initial swarms: {self.config.n_swarms}")
+            print(f"  Final swarms: {len(self.explorer.estimator.swarms)}")
+            print(f"  Total adjustments: {swarm_stats['n_adjustments']}")
+            if swarm_stats['n_adjustments'] > 0:
+                print(f"  Adjustments made at iterations:")
+                for adj in swarm_stats['adjustments']:
+                    print(f"    - Iteration {adj[0]}: {adj[1]} → {adj[2]} swarms ({adj[3]})")
             print(f"{'='*70}\n")
 
             return True

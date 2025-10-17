@@ -25,6 +25,7 @@ from simulation.exploration.rrt_planner import (
 )
 from simulation.exploration.rrt_planner_v2 import RRTPlannerV2, PerformanceConfig
 from core.ade_pspf import ADEPSPF, ADEPSPFConfig
+from core.dynamic_swarm_adjustment import DynamicSwarmAdjuster, SwarmAdjustmentConfig
 from environment.observation import RadiationObserver
 
 
@@ -327,6 +328,18 @@ class IntegratedExplorerV3:
         self.no_improvement_count: int = 0
         self.consecutive_threshold: int = 10  # Paper: 10 consecutive iterations
 
+        # Dynamic swarm adjustment (논문 Fig. 11)
+        # Balanced settings: allow adjustment but with proper clustering validation
+        swarm_adj_config = SwarmAdjustmentConfig(
+            low_rfc_threshold=0.75,
+            very_low_rfc_threshold=0.55,
+            min_iterations_before_adjustment=8,
+            check_interval=4,
+            max_swarms=config.n_swarms + 3,  # Allow some extra swarms (will be filtered by clustering)
+            enabled=True
+        )
+        self.swarm_adjuster = DynamicSwarmAdjuster(swarm_adj_config)
+
         if self.config.enable_verbose_logging:
             print(f"\n{'='*70}")
             print("EXPLORER V3 INITIALIZED")
@@ -334,6 +347,7 @@ class IntegratedExplorerV3:
             print(f"Config: {self.config.max_iterations} iterations, "
                   f"RRT V{'2' if self.config.use_rrt_v2 else '1'}")
             print(f"Robot initial state: {self.robot.get_state_summary()}")
+            print(f"Dynamic swarm adjustment: {'Enabled' if swarm_adj_config.enabled else 'Disabled'}")
             print(f"{'='*70}\n")
 
     def _log(self, message: str, level: str = "INFO"):
@@ -750,37 +764,29 @@ class IntegratedExplorerV3:
         """
         Adjust swarm number based on RFC (논문 Fig. 11).
 
-        논문 설명:
-        - RFC가 낮고 추정된 소스 수가 swarm 수보다 적으면 swarm 추가
-        - 이는 놓친 소스가 있을 가능성을 의미
+        Uses DynamicSwarmAdjuster for sophisticated adjustment logic.
 
         Args:
             rfc: Current RFC value
             n_sources_estimated: Number of estimated sources
             iteration: Current iteration number
         """
-        MIN_ITERATIONS = 5  # At least 5 iterations before adjustment
-        RFC_THRESHOLD = 0.7  # Low RFC threshold
-        MAX_SWARMS = 5  # Maximum number of swarms
+        # Use the sophisticated DynamicSwarmAdjuster
+        should_add, reason = self.swarm_adjuster.should_add_swarm(
+            estimator=self.estimator,
+            iteration=iteration,
+            current_rfc=rfc,
+            n_valid_sources=n_sources_estimated
+        )
 
-        if iteration < MIN_ITERATIONS:
-            return
-
-        current_swarms = len(self.estimator.swarms)
-
-        # Don't exceed maximum swarms
-        if current_swarms >= MAX_SWARMS:
-            return
-
-        # If RFC is low and we might be missing sources
-        if rfc < RFC_THRESHOLD and n_sources_estimated < current_swarms:
-            # Add one swarm
-            self.estimator.add_swarm()
-            if self.config.log_iteration_details:
-                print(f"\n  → Dynamic Swarm Adjustment:")
-                print(f"    Increased swarms: {current_swarms} → {current_swarms + 1}")
-                print(f"    Reason: RFC={rfc:.4f} < {RFC_THRESHOLD}, "
-                      f"estimated sources={n_sources_estimated}")
+        if should_add:
+            success = self.swarm_adjuster.add_swarm_to_estimator(
+                estimator=self.estimator,
+                iteration=iteration,
+                reason=reason
+            )
+            if not success and self.config.log_iteration_details:
+                print(f"  ⚠️  Failed to add swarm at iteration {iteration}")
 
     def run_exploration(self) -> bool:
         """
@@ -866,6 +872,16 @@ class IntegratedExplorerV3:
 
             self.iteration_results.append(iter_result)
 
+            # Update exploration phase (논문 Fig. 14-16)
+            self._update_phase(estimation_result['rfc'], iteration)
+
+            # Dynamic swarm adjustment (논문 Fig. 11)
+            self._adjust_swarm_number(
+                rfc=estimation_result['rfc'],
+                n_sources_estimated=estimation_result['n_sources'],
+                iteration=iteration
+            )
+
             # Log summary
             self._log(f"\n{'='*70}")
             self._log(f"ITERATION {iteration + 1} SUMMARY")
@@ -873,12 +889,18 @@ class IntegratedExplorerV3:
             self._log(f"Robot moved: {robot_moved} ({movement_distance:.1f}px)")
             self._log(f"Goal changed: {goal_changed}")
             self._log(f"RFC: {estimation_result['rfc']:.4f}")
+            self._log(f"Sources: {estimation_result['n_sources']}")
+            self._log(f"Swarms: {len(self.estimator.swarms)}")
+            self._log(f"Phase: {self.current_phase.name}")
             self._log(f"Time: {iter_result.total_time:.3f}s")
             self._log(f"{'='*70}\n")
 
-            # Check termination
-            if estimation_result['rfc'] >= self.config.min_rfc_threshold:
-                self._log(f"✓ Termination: RFC threshold reached ({estimation_result['rfc']:.4f})", "SUCCESS")
+            # Check termination (논문 방식)
+            should_terminate, term_reason = self._check_termination(
+                estimation_result['rfc'], iteration
+            )
+            if should_terminate:
+                self._log(f"✓ Termination: {term_reason}", "SUCCESS")
                 break
 
         self._log(f"\n{'='*70}")

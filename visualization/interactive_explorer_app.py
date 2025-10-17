@@ -44,7 +44,7 @@ class InteractiveExplorerApp:
         """Initialize the application."""
         self.root = root
         self.root.title("ADE-PSPF Interactive Explorer")
-        self.root.geometry("1600x1000")
+        self.root.geometry("1600x1600")
 
         # Set window close protocol to use safe exit
         self.root.protocol("WM_DELETE_WINDOW", self._safe_exit)

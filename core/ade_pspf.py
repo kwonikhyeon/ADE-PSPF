@@ -319,9 +319,17 @@ class ADEPSPF:
         Returns:
             List of source parameters [[x, y, intensity], ...]
         """
+        # Calculate swarm confidence (average particle weight)
+        swarm_weights = []
+        for swarm in self.swarms:
+            avg_weight = np.mean(swarm.weights) if len(swarm.weights) > 0 else 0.0
+            swarm_weights.append(avg_weight)
+
+        # Filter redundant swarms, keeping most confident ones
         valid_indices = filter_redundant_swarms(
             self.centroids,
-            min_distance=self.config.min_cluster_distance
+            min_distance=self.config.min_cluster_distance,
+            swarm_weights=swarm_weights
         )
 
         valid_sources = [self.centroids[i] for i in valid_indices]

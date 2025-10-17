@@ -21,6 +21,9 @@ def mean_shift_clustering(
     """
     Find centroid of particle distribution using weighted mean shift.
 
+    Implements proper weighted mean shift algorithm as described in the paper
+    to find the mode (peak) of the particle distribution.
+
     Args:
         particles: (N, 3) array of particles [x, y, intensity]
         weights: (N,) array of particle weights
@@ -53,20 +56,25 @@ def mean_shift_clustering(
             axis=0
         )
         bandwidth = np.mean(np.sqrt(weighted_var)) * 1.5
+        # Ensure minimum bandwidth
+        bandwidth = max(bandwidth, 5.0)
 
     try:
-        # sklearn MeanShift doesn't support weighted clustering directly
-        # So we use a workaround: replicate particles based on weights
-        # Alternative: implement custom weighted mean shift
-
-        # Simple weighted mean as centroid (fast approximation)
-        centroid = np.average(particles, weights=weights_norm, axis=0)
+        # Use proper weighted mean shift to find the mode (peak)
+        # This is critical for accurate source localization
+        centroid, success = weighted_mean_shift(
+            particles,
+            weights_norm,
+            bandwidth=bandwidth,
+            max_iter=max_iter,
+            tol=1e-3
+        )
 
         # Check if centroid is valid
-        if np.any(np.isnan(centroid)) or np.any(np.isinf(centroid)):
+        if centroid is None or np.any(np.isnan(centroid)) or np.any(np.isinf(centroid)):
             return None, False
 
-        return centroid, True
+        return centroid, success
 
     except Exception as e:
         warnings.warn(f"Mean shift clustering failed: {e}")
@@ -132,40 +140,63 @@ def weighted_mean_shift(
 
 def filter_redundant_swarms(
     centroids: list[Optional[np.ndarray]],
-    min_distance: float = 20.0
+    min_distance: float = 20.0,
+    swarm_weights: Optional[list[float]] = None
 ) -> list[int]:
     """
     Filter redundant swarms that are too close to each other.
 
     When multiple swarms converge to similar centroids, keep only
-    the most confident ones.
+    the most confident ones based on particle weights.
 
     Args:
         centroids: List of centroids (can contain None for failed clustering)
         min_distance: Minimum distance between valid centroids (pixels)
+        swarm_weights: Optional list of swarm confidence scores (average particle weights)
 
     Returns:
         List of valid swarm indices
     """
-    valid_indices = []
-    valid_centroids = []
-
+    # Build list of valid centroids with their indices and weights
+    centroid_data = []
     for i, centroid in enumerate(centroids):
         if centroid is None:
             continue
 
+        weight = swarm_weights[i] if swarm_weights is not None else 1.0
+        centroid_data.append({
+            'index': i,
+            'centroid': centroid,
+            'weight': weight
+        })
+
+    if len(centroid_data) == 0:
+        return []
+
+    # Sort by weight (descending) - keep most confident swarms first
+    centroid_data.sort(key=lambda x: x['weight'], reverse=True)
+
+    valid_indices = []
+    valid_centroids = []
+
+    for data in centroid_data:
+        centroid = data['centroid']
+
         # Check if too close to existing valid centroids
         is_redundant = False
         for existing_centroid in valid_centroids:
+            # Only compare spatial position (x, y), not intensity
             distance = np.linalg.norm(centroid[:2] - existing_centroid[:2])
             if distance < min_distance:
                 is_redundant = True
                 break
 
         if not is_redundant:
-            valid_indices.append(i)
+            valid_indices.append(data['index'])
             valid_centroids.append(centroid)
 
+    # Return indices in original order
+    valid_indices.sort()
     return valid_indices
 
 
